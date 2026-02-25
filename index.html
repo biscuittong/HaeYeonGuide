@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>학교 안내 - 3장 사진 마커</title>
+
+  <!-- Panzoom (간단/가벼움) -->
+  <script src="https://cdn.jsdelivr.net/npm/@panzoom/panzoom@4.6.1/dist/panzoom.min.js"></script>
+
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #wrap { position: relative; width: 100vw; height: 100vh; overflow: hidden; background:#111; }
+    #stage { position: absolute; inset: 0; overflow: hidden; }
+
+    /* zoom/pan 대상 */
+    #panArea {
+      position: absolute;
+      left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      transform-origin: 0 0;
+      will-change: transform;
+    }
+
+    #photo {
+      display: block;
+      max-width: none; /* pan/zoom 위해 */
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+
+    /* 글자만 둥둥(배경 없음) */
+    .txt-marker {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      color: #fff;
+      font-weight: 900;
+      font-size: 18px;
+      letter-spacing: -0.5px;
+      text-shadow: 0 2px 10px rgba(0,0,0,.95);
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+      pointer-events: auto;
+      animation: bob 2.4s ease-in-out infinite;
+      transform-origin: center center;
+    }
+    @keyframes bob { 0%,100%{ margin-top:0 } 50%{ margin-top:-3px } }
+    .txt-marker.is-on { transform: translate(-50%, -50%) scale(1.6); }
+
+    /* hover 시 디폴트처럼 커짐(PC) */
+    @media (hover:hover) {
+      .txt-marker:hover { transform: translate(-50%, -50%) scale(1.6); }
+    }
+
+    /* 우측 패널 */
+    #panel{
+      position:absolute; top:12px; right:12px;
+      width:min(400px, calc(100vw - 24px));
+      max-height:calc(100vh - 24px); overflow:auto;
+      background:rgba(15,15,18,.72); color:#fff;
+      border:1px solid rgba(255,255,255,.15);
+      border-radius:14px; padding:12px;
+      backdrop-filter:blur(10px);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif;
+      z-index: 10;
+    }
+    #panel h1{ font-size:14px; margin:0 0 8px 0; opacity:.9; }
+    .hint{ font-size:12px; opacity:.85; line-height:1.45; margin-bottom:10px; }
+
+    .seg{ display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 12px; }
+    .seg button.active{ outline:2px solid rgba(47,124,255,.95); background:#2f7cff; }
+    button{
+      border:0; border-radius:10px; padding:8px 10px;
+      font-weight:800; cursor:pointer;
+      background:rgba(255,255,255,.10); color:#fff;
+    }
+    button.primary{ background:#2f7cff; }
+    button.danger{ background:rgba(255,60,60,.85); }
+
+    .coord{
+      font-size:12px; padding:10px; border-radius:10px;
+      background:rgba(0,0,0,.25); border:1px solid rgba(255,255,255,.12);
+      margin:10px 0; line-height:1.45; word-break:break-all;
+    }
+
+    .list{ display:grid; gap:8px; margin-top:10px; }
+    .item{
+      display:grid; grid-template-columns:1fr auto; gap:8px; align-items:center;
+      padding:10px; border-radius:12px;
+      background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.10);
+    }
+    .item.active{ outline:2px solid rgba(47,124,255,.9); }
+    .name{ font-size:13px; font-weight:900; }
+    .meta{ font-size:11px; opacity:.85; margin-top:2px; }
+    .mini{ display:flex; gap:6px; }
+    .mini button{ padding:6px 8px; border-radius:9px; font-size:12px; }
+
+    #toast{
+      position:absolute; left:12px; bottom:12px;
+      background:rgba(0,0,0,.65); color:#fff;
+      padding:10px 12px; border-radius:12px; font-size:12px;
+      opacity:0; transform:translateY(8px); transition:.18s ease;
+      pointer-events:none; z-index: 20;
+    }
+    #toast.show{ opacity:1; transform:translateY(0); }
+
+    /* 간단 컨트롤 버튼 */
+    #controls{
+      position:absolute; left:12px; top:12px;
+      display:flex; gap:8px; z-index: 10;
+    }
+  </style>
+</head>
+
+<body>
+<div id="wrap">
+  <div id="stage">
+    <div id="panArea">
+      <img id="photo" alt="school photo" />
+      <div id="markersLayer"></div>
+    </div>
+  </div>
+
+  <div id="controls">
+    <button id="btnZoomIn" class="primary">+</button>
+    <button id="btnZoomOut">-</button>
+    <button id="btnFit">맞춤</button>
+  </div>
+
+  <div id="panel">
+    <h1>📍 일반 사진 3장 + 글자 마커</h1>
+    <div class="hint">
+      ① 위에서 <b>사진</b> 선택<br/>
+      ② 오른쪽 목록에서 <b>장소 선택</b> (파란 테두리)<br/>
+      ③ 사진을 <b>클릭/탭</b> → 선택된 장소 마커가 그 위치(x,y)로 저장/이동<br/>
+      ④ 마커(글자) 또는 목록을 누르면 <b>그 위치로 부드럽게 이동</b>
+    </div>
+
+    <div class="seg" id="sceneTabs"></div>
+
+    <div class="coord" id="lastCoord">마지막 클릭 좌표: <b>-</b></div>
+
+    <div class="seg">
+      <button id="btnCopyCoord" class="primary">마지막 좌표 복사</button>
+      <button id="btnCopyJson">현재 사진 JSON 복사</button>
+      <button id="btnCopyAll">전체(3장) JSON 복사</button>
+      <button id="btnReset" class="danger">저장 초기화</button>
+    </div>
+
+    <div class="list" id="markerList"></div>
+  </div>
+
+  <div id="toast"></div>
+</div>
+
+<script>
+  // ====== 0) 사진 3장 URL만 바꾸세요 ======
+  const SCENES = [
+    { id: 'img1', name: '사진 1', src: 'https://picsum.photos/id/1015/1600/900' },
+    { id: 'img2', name: '사진 2', src: 'https://picsum.photos/id/1025/1600/900' },
+    { id: 'img3', name: '사진 3', src: 'https://picsum.photos/id/1035/1600/900' },
+  ];
+
+  const LABELS = ['무한상상실','교무실','과학실','행정실','상담실','보건실','가사실'];
+  const STORAGE_KEY = 'photo_markers_3imgs_v1';
+
+  // 좌표는 "이미지의 원본 픽셀 좌표(x,y)"로 저장 (어떤 화면 크기여도 일관)
+  function loadState() {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); }
+    catch { return null; }
+  }
+  function saveState(s) { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); }
+  function makeInitialState() {
+    const s = { scenes: {} };
+    for (const scene of SCENES) {
+      s.scenes[scene.id] = {};
+      LABELS.forEach((label, i) => {
+        s.scenes[scene.id][label] = { label, enabled: true, x: null, y: null };
+      });
+    }
+    return s;
+  }
+  const state = loadState() ?? makeInitialState();
+
+  const $photo = document.getElementById('photo');
+  const $panArea = document.getElementById('panArea');
+  const $markersLayer = document.getElementById('markersLayer');
+  const $tabs = document.getElementById('sceneTabs');
+  const $list = document.getElementById('markerList');
+  const $last = document.getElementById('lastCoord');
+  const $toast = document.getElementById('toast');
+
+  const $btnCopyCoord = document.getElementById('btnCopyCoord');
+  const $btnCopyJson  = document.getElementById('btnCopyJson');
+  const $btnCopyAll   = document.getElementById('btnCopyAll');
+  const $btnReset     = document.getElementById('btnReset');
+
+  const $btnZoomIn  = document.getElementById('btnZoomIn');
+  const $btnZoomOut = document.getElementById('btnZoomOut');
+  const $btnFit     = document.getElementById('btnFit');
+
+  let currentSceneId = SCENES[0].id;
+  let activeLabel = LABELS[0];
+  let lastClick = null;
+
+  function toast(msg) {
+    $toast.textContent = msg;
+    $toast.classList.add('show');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => $toast.classList.remove('show'), 1200);
+  }
+
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); toast('복사 완료!'); }
+    catch {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta);
+      ta.select(); document.execCommand('copy'); ta.remove();
+      toast('복사 완료!');
+    }
+  }
+
+  // Panzoom setup
+  const panzoom = Panzoom($panArea, {
+    maxScale: 6,
+    minScale: 0.4,
+    contain: 'outside',
+    cursor: 'grab'
+  });
+
+  document.getElementById('stage').addEventListener('wheel', panzoom.zoomWithWheel);
+
+  $btnZoomIn.onclick  = () => panzoom.zoomIn();
+  $btnZoomOut.onclick = () => panzoom.zoomOut();
+  $btnFit.onclick     = () => fitToScreen();
+
+  function fitToScreen() {
+    // 이미지가 로드된 뒤, 화면에 맞도록 초기 scale/center
+    const stage = document.getElementById('stage').getBoundingClientRect();
+    const iw = $photo.naturalWidth, ih = $photo.naturalHeight;
+    if (!iw || !ih) return;
+
+    const scale = Math.min(stage.width / iw, stage.height / ih);
+    // translate는 panArea의 transform으로 관리됨
+    panzoom.setTransform(0, 0, scale);
+    // 중앙으로
+    const tx = (stage.width - iw * scale) / 2;
+    const ty = (stage.height - ih * scale) / 2;
+    panzoom.pan(tx, ty, { animate: true });
+  }
+
+  // 화면좌표 -> 이미지 원본 픽셀좌표(x,y) 계산
+  function screenToImageXY(clientX, clientY) {
+    const imgRect = $photo.getBoundingClientRect();
+    const iw = $photo.naturalWidth, ih = $photo.naturalHeight;
+    if (!iw || !ih) return null;
+
+    const rx = (clientX - imgRect.left) / imgRect.width;
+    const ry = (clientY - imgRect.top) / imgRect.height;
+
+    const x = Math.max(0, Math.min(iw, rx * iw));
+    const y = Math.max(0, Math.min(ih, ry * ih));
+    return { x, y };
+  }
+
+  // 이미지좌표(x,y) -> 화면에 보이도록 이동(팬 + 줌)
+  function goToXY(x, y, targetScale = null) {
+    const stage = document.getElementById('stage').getBoundingClientRect();
+    const iw = $photo.naturalWidth, ih = $photo.naturalHeight;
+    if (!iw || !ih) return;
+
+    const current = panzoom.getScale();
+    const scale = targetScale ?? Math.max(current, 1.8); // 기본은 좀 확대해서 안내 느낌
+    panzoom.zoom(scale, { animate: true });
+
+    // x,y가 화면 중앙에 오도록 pan 값 계산
+    // panzoom transform: translate(tx,ty) scale(s)
+    const tx = stage.width / 2 - x * scale;
+    const ty = stage.height / 2 - y * scale;
+    panzoom.pan(tx, ty, { animate: true });
+  }
+
+  // 마커 렌더링
+  function clearMarkers() { $markersLayer.innerHTML = ''; }
+
+  function addMarker(label, x, y) {
+    const iw = $photo.naturalWidth, ih = $photo.naturalHeight;
+    if (!iw || !ih) return;
+
+    const el = document.createElement('div');
+    el.className = 'txt-marker';
+    el.textContent = label;
+
+    // 마커를 이미지 위 "원본 좌표" 기준으로 배치 (비율로 변환)
+    el.style.left = `${(x / iw) * 100}%`;
+    el.style.top  = `${(y / ih) * 100}%`;
+
+    // 마커 클릭: 강조 + 그 위치로 이동
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      el.classList.toggle('is-on');   // 모바일 탭 강조
+      goToXY(x, y);
+      toast(`${label}로 이동`);
+    });
+
+    $markersLayer.appendChild(el);
+  }
+
+  function renderSceneMarkers() {
+    clearMarkers();
+    const sceneMap = state.scenes[currentSceneId];
+    for (const label of LABELS) {
+      const m = sceneMap[label];
+      if (!m?.enabled || m.x == null || m.y == null) continue;
+      addMarker(label, m.x, m.y);
+    }
+  }
+
+  function renderTabs() {
+    $tabs.innerHTML = '';
+    SCENES.forEach(s => {
+      const b = document.createElement('button');
+      b.textContent = s.name;
+      if (s.id === currentSceneId) b.classList.add('active');
+      b.onclick = () => switchScene(s.id);
+      $tabs.appendChild(b);
+    });
+  }
+
+  function renderList() {
+    $list.innerHTML = '';
+    const sceneMap = state.scenes[currentSceneId];
+
+    LABELS.forEach(label => {
+      const m = sceneMap[label];
+      const posText = (m.x == null) ? '미지정' : `x:${Math.round(m.x)}, y:${Math.round(m.y)}`;
+
+      const item = document.createElement('div');
+      item.className = 'item' + (label === activeLabel ? ' active' : '');
+      item.innerHTML = `
+        <div>
+          <div class="name">${label}</div>
+          <div class="meta">${posText}</div>
+        </div>
+        <div class="mini">
+          <button data-act="goto">이동</button>
+          <button class="danger" data-act="del">삭제</button>
+        </div>
+      `;
+
+      // 목록 클릭 = 선택 + (좌표 있으면) 이동
+      item.addEventListener('click', (e) => {
+        if (e.target?.dataset?.act) return;
+        activeLabel = label;
+        renderList();
+        if (m.x != null) { goToXY(m.x, m.y); toast(`${label}로 이동`); }
+        else toast(`선택: ${label} (사진 클릭해서 배치)`);
+      });
+
+      item.querySelector('[data-act="goto"]').onclick = (e) => {
+        e.stopPropagation();
+        if (m.x == null) return toast('좌표가 아직 없어요. 사진을 클릭해 배치하세요.');
+        goToXY(m.x, m.y);
+      };
+
+      item.querySelector('[data-act="del"]').onclick = (e) => {
+        e.stopPropagation();
+        m.enabled = false;
+        saveState(state);
+        renderSceneMarkers();
+        renderList();
+        toast(`${label} 삭제(비활성)`);
+      };
+
+      $list.appendChild(item);
+    });
+  }
+
+  async function switchScene(sceneId) {
+    if (sceneId === currentSceneId) return;
+    currentSceneId = sceneId;
+    renderTabs();
+    await loadImageForScene(sceneId);
+    renderSceneMarkers();
+    renderList();
+    toast('사진 전환 완료');
+  }
+
+  function loadImageForScene(sceneId) {
+    const scene = SCENES.find(s => s.id === sceneId);
+    return new Promise((resolve, reject) => {
+      $photo.onload = () => { fitToScreen(); resolve(); };
+      $photo.onerror = reject;
+      $photo.src = scene.src;
+    });
+  }
+
+  // 사진 클릭: 좌표 찍기 + 선택된 장소 저장
+  document.getElementById('stage').addEventListener('click', (e) => {
+    // 패널/버튼 클릭은 제외
+    const inPanel = e.target.closest('#panel') || e.target.closest('#controls');
+    if (inPanel) return;
+
+    const xy = screenToImageXY(e.clientX, e.clientY);
+    if (!xy) return;
+
+    lastClick = xy;
+    $last.innerHTML = `마지막 클릭 좌표: <b>x ${Math.round(xy.x)}, y ${Math.round(xy.y)}</b>`;
+
+    const sceneMap = state.scenes[currentSceneId];
+    const m = sceneMap[activeLabel];
+    m.enabled = true;
+    m.x = xy.x; m.y = xy.y;
+    saveState(state);
+
+    renderSceneMarkers();
+    renderList();
+    toast(`${activeLabel} 위치 저장!`);
+  });
+
+  // 복사 버튼
+  $btnCopyCoord.onclick = () => {
+    if (!lastClick) return toast('먼저 사진을 클릭/탭해 주세요.');
+    copyText(`{ "x": ${lastClick.x}, "y": ${lastClick.y} }`);
+  };
+
+  $btnCopyJson.onclick = () => {
+    const sceneMap = state.scenes[currentSceneId];
+    const out = {};
+    LABELS.forEach(label => {
+      const m = sceneMap[label];
+      out[label] = (m.enabled && m.x != null) ? { x: m.x, y: m.y } : null;
+    });
+    copyText(JSON.stringify({ scene: currentSceneId, markers: out }, null, 2));
+  };
+
+  $btnCopyAll.onclick = () => {
+    const all = {};
+    for (const s of SCENES) {
+      const sceneMap = state.scenes[s.id];
+      all[s.id] = {};
+      LABELS.forEach(label => {
+        const m = sceneMap[label];
+        all[s.id][label] = (m.enabled && m.x != null) ? { x: m.x, y: m.y } : null;
+      });
+    }
+    copyText(JSON.stringify(all, null, 2));
+  };
+
+  $btnReset.onclick = () => {
+    if (!confirm('저장된 좌표(3장 모두)를 초기화할까요?')) return;
+    localStorage.removeItem(STORAGE_KEY);
+    location.reload();
+  };
+
+  // 초기 로드
+  renderTabs();
+  loadImageForScene(currentSceneId).then(() => {
+    renderSceneMarkers();
+    renderList();
+    toast('준비 완료');
+  });
+</script>
+</body>
+</html>
